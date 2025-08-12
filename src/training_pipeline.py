@@ -3,18 +3,61 @@ from xgboost import XGBClassifier
 from src.data_loader import load_orders_from_db  # 改成从PG读取原始数据
 from src.feature_engineering import process_features
 from src.utils import tune_hyperparameters
+from src.config import PG_CONFIG
 import pandas as pd
 import joblib
 import os
 from datetime import datetime
 import json
 import mlflow
+import subprocess
+import socket
 
 PROCESSED_DIR = "data/processed"
 
-def main():
-    # 1. 数据加载 + 特征工程
 
+def start_mlflow_server():
+    """如果 MLflow server 没有运行则自动启动"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if sock.connect_ex(("127.0.0.1", 5000)) == 0:
+            print("[INFO] MLflow server 已在运行，跳过启动")
+            return
+        sock.close()
+    except Exception as e:
+        print(f"[WARN] 检查 MLflow server 失败: {e}")
+
+    print("[INFO] 正在启动 MLflow server ...")
+    artifact_dir = os.path.abspath("mlruns_server")
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    user = PG_CONFIG["user"]
+    password = PG_CONFIG["password"]
+    host = PG_CONFIG["host"]
+    port = PG_CONFIG["port"]
+    db = "mlflow_db"  # MLflow专用数据库
+
+    cmd = [
+        "mlflow", "server",
+        "--backend-store-uri", f"postgresql://{user}:{password}@{host}:{port}/{db}",
+        "--default-artifact-root", artifact_dir,
+        "--host", "0.0.0.0",
+        "--port", "5000"
+    ]
+
+    subprocess.Popen(cmd)
+    print(f"[INFO] MLflow server 已启动: Backend=postgresql://{user}@{host}/{db}, Artifact Root={artifact_dir}")
+
+
+def main():
+    # 启动 MLflow server（如已运行则跳过）
+    start_mlflow_server()
+
+    # 告诉 MLflow 用 server 作为 tracking backend
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment("supply_chain_delay")
+
+    # 1. 数据加载 + 特征工程
     X_path = os.path.join(PROCESSED_DIR, "X_processed.csv")
     y_path = os.path.join(PROCESSED_DIR, "y.csv")
     encoders_path = os.path.join(PROCESSED_DIR, "encoders.pkl")
@@ -26,7 +69,7 @@ def main():
         encoders = joblib.load(encoders_path)
     else:
         print("[INFO] 未检测到 processed 数据，开始从数据库加载原始数据并处理...")
-        df = load_orders_from_db()  # 如果你还在CSV加载阶段，可用 load_raw_csv
+        df = load_orders_from_db()
         X, y, encoders = process_features(df, save_dir=PROCESSED_DIR)
 
     # 切分数据
@@ -38,7 +81,7 @@ def main():
     param_grid = {
         'n_estimators': [100, 200],
         'max_depth': [4, 7],
-        'learning_rate': [0.01, 0.15]
+        'learning_rate': [0.01, 0.14]
     }
 
     # 3. 调参 + 评估
@@ -68,12 +111,14 @@ def main():
     print(f"\n[INFO] 模型与编码器已保存，版本: {timestamp}")
     print(f"[INFO] 最佳参数: {best_params}")
 
-    # 5. MLflow 记录
-    mlflow.set_experiment("supply_chain_delay")
+    # 5. MLflow 记录到 server
     with mlflow.start_run():
         mlflow.log_params(best_params)
         mlflow.log_metrics(metrics)
         mlflow.xgboost.log_model(best_model, artifact_path="model")
+
+    print("[INFO] 训练结果已记录到 MLflow Server")
+
 
 if __name__ == "__main__":
     main()
