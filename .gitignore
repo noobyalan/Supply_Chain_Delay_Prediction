@@ -1,0 +1,15 @@
+echo "__pycache__/
+*.py[cod]
+*$py.class
+*.pkl
+mlruns/
+data/
+!data/README.md
+models/
+!models/README.md
+reports/
+!reports/README.md
+.ipynb_checkpoints/
+.DS_Store
+.env
+" > .gitignore
