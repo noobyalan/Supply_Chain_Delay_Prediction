@@ -1,23 +1,40 @@
-# model.py
-import xgboost as xgb
-from sklearn.metrics import classification_report, roc_auc_score
+# src/model.py
+from xgboost import XGBClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
-class DelayPredictor:
-    def __init__(self, **params):
-        self.model = xgb.XGBClassifier(**params)
+def create_pipeline(numeric_features, categorical_features, **model_params):
+    """构造预处理 + 模型的训练Pipeline"""
 
-    def train(self, X_train, y_train):
-        self.model.fit(X_train, y_train)
+    # 数值特征预处理
+    numeric_transformer = Pipeline(steps=[
+        ("scaler", StandardScaler())
+    ])
 
-    def evaluate(self, X_test, y_test):
-        preds = self.model.predict(X_test)
-        proba = self.model.predict_proba(X_test)[:, 1]
-        print(classification_report(y_test, preds))
-        print("AUC:", roc_auc_score(y_test, proba))
+    # 类别特征预处理
+    categorical_transformer = Pipeline(steps=[
+        ("onehot", OneHotEncoder(handle_unknown="ignore"))
+    ])
 
-    def save_model(self, path):
-        self.model.save_model(path)
+    # 列组合
+    preprocessor = ColumnTransformer(transformers=[
+        ("num", numeric_transformer, numeric_features),
+        ("cat", categorical_transformer, categorical_features)
+    ])
 
-    def load_model(self, path):
-        self.model = xgb.XGBClassifier()
-        self.model.load_model(path)
+    # 模型（这里用 XGBClassifier，将来换模型直接改这一行）
+    clf = XGBClassifier(
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=42,
+        **model_params
+    )
+
+    # 拼装 Pipeline
+    pipeline = Pipeline(steps=[
+        ("preprocessor", preprocessor),
+        ("classifier", clf)
+    ])
+
+    return pipeline
